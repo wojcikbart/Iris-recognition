@@ -3,8 +3,6 @@ from networkx import density
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage
-from scipy.ndimage import sobel
-
 class ImageProcessor:
 
     def __init__(self, image_path):
@@ -161,6 +159,84 @@ class ImageProcessor:
 
     def morph_close(self, kernel_shape='rect', kernel_size=3, iterations=1):
         return self.dilate(kernel_shape, kernel_size, iterations).erode(kernel_shape, kernel_size, iterations)
+    
+    def erode2(self, kernel_shape='rect', kernel_size=3, iterations=1):
+        kernel = self._create_kernel(kernel_shape, kernel_size)
+        R, G, B, A = self.get_RGBA(processed=True)
+        
+        for _ in range(iterations):
+            R = ndimage.binary_erosion(R, structure=kernel, iterations=1).astype(np.uint8) * 255
+            G = ndimage.binary_erosion(G, structure=kernel, iterations=1).astype(np.uint8) * 255
+            B = ndimage.binary_erosion(B, structure=kernel, iterations=1).astype(np.uint8) * 255
+        
+        if A is not None:
+            self.processed_pixels = np.stack([R, G, B, A], axis=-1)
+        else:
+            self.processed_pixels = np.stack([R, G, B], axis=-1)
+        
+        return self
+
+    def dilate2(self, kernel_shape='rect', kernel_size=3, iterations=1):
+        kernel = self._create_kernel(kernel_shape, kernel_size)
+        R, G, B, A = self.get_RGBA(processed=True)
+        
+        for _ in range(iterations):
+            R = ndimage.binary_dilation(R, structure=kernel, iterations=1).astype(np.uint8) * 255
+            G = ndimage.binary_dilation(G, structure=kernel, iterations=1).astype(np.uint8) * 255
+            B = ndimage.binary_dilation(B, structure=kernel, iterations=1).astype(np.uint8) * 255
+        
+        if A is not None:
+            self.processed_pixels = np.stack([R, G, B, A], axis=-1)
+        else:
+            self.processed_pixels = np.stack([R, G, B], axis=-1)
+        
+        return self
+    
+    def morph_open2(self, kernel_shape='rect', kernel_size=3, iterations=1):
+        kernel = self._create_kernel(kernel_shape, kernel_size)
+        R, G, B, A = self.get_RGBA(processed=True)
+        
+        R = ndimage.binary_opening(R, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        G = ndimage.binary_opening(G, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        B = ndimage.binary_opening(B, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        
+        if A is not None:
+            self.processed_pixels = np.stack([R, G, B, A], axis=-1)
+        else:
+            self.processed_pixels = np.stack([R, G, B], axis=-1)
+        
+        return self
+
+    def morph_close2(self, kernel_shape='rect', kernel_size=3, iterations=1):
+        kernel = self._create_kernel(kernel_shape, kernel_size)
+        R, G, B, A = self.get_RGBA(processed=True)
+        
+        R = ndimage.binary_closing(R, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        G = ndimage.binary_closing(G, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        B = ndimage.binary_closing(B, structure=kernel, iterations=iterations).astype(np.uint8) * 255
+        
+        if A is not None:
+            self.processed_pixels = np.stack([R, G, B, A], axis=-1)
+        else:
+            self.processed_pixels = np.stack([R, G, B], axis=-1)
+        
+        return self
+    
+    def reverse_pixels(self, processed=True):
+        if processed:
+            R, G, B, A = self.get_RGBA(processed=True)
+        else:
+            R, G, B, A = self.get_RGBA()
+
+        R_new = np.where(R == 0, 255, 0).astype(np.uint8)
+        G_new = np.where(G == 0, 255, 0).astype(np.uint8)
+        B_new = np.where(B == 0, 255, 0).astype(np.uint8)
+
+        if A is not None:
+            self.processed_pixels = np.stack([R_new, G_new, B_new, A], axis=-1)
+        else:
+            self.processed_pixels = np.stack([R_new, G_new, B_new], axis=-1)
+
    
     def show(self, pixels=None):
         if pixels is None:
@@ -172,6 +248,12 @@ class ImageProcessor:
         img = Image.fromarray(self.processed_pixels)
         img.show()
 
+    def show_processed2(self, title="Processed Image"):
+        plt.imshow(self.processed_pixels)
+        plt.title(title)
+        plt.axis('off')
+        plt.show()
+
     def save(self, output_path):
         img = Image.fromarray(self.processed_pixels)
         img.save(output_path)
@@ -181,17 +263,17 @@ class ImageProcessor:
 
 if __name__ == "__main__":
     processor = ImageProcessor("test_data/test_eye.JPG")
-    threshold_iris, threshold_pupil = processor.compute_binarization_treshold(X_I=2.2, X_P=4.7)
+    threshold_iris, threshold_pupil = processor.compute_binarization_treshold(X_I=2.2, X_P=5)
     processor.reset()
-    # processor.grayscale(method="luminosity")
-    # processor.binarize(threshold_iris, processed=True)
-    # processor.show_processed()
-    # processor.reset()
     processor.grayscale(method="luminosity")
-    processor.binarize(threshold_pupil, processed=True)
-    processor.show_processed()
-    processor.morph_close(kernel_shape='circle', kernel_size=3, iterations=1)
-    processor.show_processed()
+    processor.binarize(threshold_iris, processed=True)
+    processor.show_processed2("Binarized Iris")
+    processor.morph_open(kernel_shape='circle', kernel_size=3, iterations=1)
+    processor.show_processed2("Closed Iris")
+    # processor.reset()
+    # processor.grayscale(method="luminosity")
+    # processor.binarize(threshold_pupil, processed=True)
+    # processor.show_processed()
     
 
     ## MORPHOLOGICAL OPERATIONS TESTS
@@ -203,6 +285,8 @@ if __name__ == "__main__":
 
     # test = ImageProcessor("test_data/test_close.png")
     # test.show()
+    # test.reverse_pixels()
     # test.morph_close(kernel_shape='circle', kernel_size=3, iterations=5)
+    # test.reverse_pixels()
     # test.show_processed()
 

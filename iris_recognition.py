@@ -3,6 +3,7 @@ from networkx import density
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage
+
 class ImageProcessor:
 
     def __init__(self, image_path):
@@ -44,7 +45,6 @@ class ImageProcessor:
         gray = methods[method]
         pixels = np.stack([gray, gray, gray, A], axis=-1) if A is not None else np.stack([gray] * 3, axis=-1)
 
-        # self.show(pixels)
         self.processed_pixels = pixels
 
 
@@ -71,10 +71,21 @@ class ImageProcessor:
         return int(P/X_I), int(P/X_P)
     
     def _create_kernel(self, shape='rect', size=3):
+        # Handle different size specifications
+        if isinstance(size, tuple):
+            height, width = size
+        else:
+            height = width = size
+        
         if shape == 'rect':
-            return np.ones((size, size), dtype=np.uint8)
+            return np.ones((height, width), dtype=np.uint8)
         elif shape == 'circle':
-            kernel = np.zeros((size, size), dtype=np.uint8)
+            # For circles, we need a square kernel
+            if height != width:
+                size = max(height, width)
+                height = width = size
+                
+            kernel = np.zeros((height, width), dtype=np.uint8)
             radius = size // 2
             center = radius
             y, x = np.ogrid[-center:size-center, -center:size-center]
@@ -82,7 +93,7 @@ class ImageProcessor:
             kernel[mask] = 1
             return kernel
         else:
-            raise ValueError("Unknown kernel shape! Use 'rect' or 'circle'")
+            raise ValueError("Unknown kernel shape! Use 'rect' or 'circle'") 
 
     def _erode(self, image, kernel):
         h, w = image.shape
@@ -264,12 +275,14 @@ class ImageProcessor:
 if __name__ == "__main__":
     processor = ImageProcessor("test_data/test_eye.JPG")
     threshold_iris, threshold_pupil = processor.compute_binarization_treshold(X_I=2.2, X_P=5)
+    processor.show_processed2()
     processor.reset()
     processor.grayscale(method="luminosity")
-    processor.binarize(threshold_iris, processed=True)
-    processor.show_processed2("Binarized Iris")
-    processor.morph_open(kernel_shape='circle', kernel_size=3, iterations=1)
-    processor.show_processed2("Closed Iris")
+    processor.show_processed2()
+    # processor.binarize(threshold_iris, processed=True)
+    # processor.show_processed2("Binarized Iris")
+    # processor.morph_open(kernel_shape='circle', kernel_size=3, iterations=1)
+    # processor.show_processed2("Closed Iris")
     # processor.reset()
     # processor.grayscale(method="luminosity")
     # processor.binarize(threshold_pupil, processed=True)

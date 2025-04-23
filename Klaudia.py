@@ -1,6 +1,7 @@
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from scipy import ndimage
 import cv2
 import math
@@ -186,6 +187,7 @@ class IrisSegmentation:
         if circles is not None:
             circles = np.uint16(np.around(circles))
             for i in circles[0, :]:
+                i = i.astype(np.float64)
                 # Take the first circle that has its center close to the pupil center
                 center_dist = np.sqrt((i[0] - self.pupil_center[0])**2 + (i[1] - self.pupil_center[1])**2)
                 if center_dist < self.pupil_radius:  # Centers should be very close
@@ -247,7 +249,7 @@ class IrisSegmentation:
         cv2.circle(
             visualization, 
             self.pupil_center, 
-            self.iris_radius, 
+            int(self.iris_radius), 
             (255, 0, 0), 
             2
         )
@@ -274,82 +276,239 @@ class IrisSegmentation:
         """Save the segmentation visualization to a file"""
         visualization = self.visualize_segmentation()
         cv2.imwrite(filename, cv2.cvtColor(visualization, cv2.COLOR_RGB2BGR))
+    
+    def generate_iris_code(self, radial_bands=8, frequency=0.5):
+        """Generate binary iris code using Gabor wavelet transform"""
+        if self.unwrapped_iris is None:
+            self.unwrap_iris()
+
+        sigma = 0.5 * math.pi * frequency
+        
+        band_height = self.unwrapped_iris.shape[0] // radial_bands
+        code = np.zeros((radial_bands, self.unwrapped_iris.shape[1] * 2), dtype=np.uint8)
+
+        for band in range(radial_bands):
+            start = band * band_height
+            end = (band + 1) * band_height if band < radial_bands - 1 else self.unwrapped_iris.shape[0]
+            strip = self.unwrapped_iris[start:end, :]
+
+            # Average over the strip to get a 1D signal
+            signal = np.mean(strip, axis=0)
+
+            # Apply 1D Gabor filter
+            t = np.linspace(-np.pi, np.pi, len(signal))
+            
+            # Using corrected formula for sigma
+            gabor_real = np.exp(-t**2 / (2 * sigma**2)) * np.cos(2 * np.pi * frequency * t)
+            gabor_imag = np.exp(-t**2 / (2 * sigma**2)) * np.sin(2 * np.pi * frequency * t)
+
+            filtered_real = np.convolve(signal, gabor_real, mode='same')
+            filtered_imag = np.convolve(signal, gabor_imag, mode='same')
+
+            # Binarize based on sign of real and imaginary parts
+            real_binary = (filtered_real > 0).astype(np.uint8)
+            imag_binary = (filtered_imag > 0).astype(np.uint8)
+
+            # Store both parts in the code
+            code[band, :signal.shape[0]] = real_binary
+            code[band, signal.shape[0]:] = imag_binary
+
+        self.iris_code = code
+        return code
+    
+    def visualize_iris_code(self):
+        """Visualize the iris code"""
+        if not hasattr(self, 'iris_code'):
+            self.generate_iris_code()
+
+        plt.figure(figsize=(10, 2.5))
+        plt.imshow(self.iris_code, cmap='gray', interpolation='nearest', aspect='auto')
+        plt.title("Iris Code Map")
+        plt.xlabel("Angular bits (real + imag)")
+        plt.ylabel("Radial bands")
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.tight_layout()
+        plt.show()
+
+    def hamming_distance(self, other_code):
+        """Calculate Hamming distance between two iris codes"""
+        if self.iris_code is None:
+            self.generate_iris_code()
+        
+        if other_code is None:
+            raise ValueError("Other code must be provided for Hamming distance calculation.")
+        
+        if self.iris_code.shape != other_code.shape:
+            raise ValueError("Iris codes must be of the same size for Hamming distance calculation.")
+        
+        # hamming distance
+        return np.sum(self.iris_code != other_code) / np.prod(self.iris_code.shape)
+    
+class IrisSegmenter:
+    def __init__(self):
+        pass
+
+    def prep(self, segmentation, X_I=2.2, X_P=5.3):
+        segmentation.to_grayscale()
+        iris_threshold, pupil_threshold = segmentation.compute_threshold(X_I=X_I, X_P=X_P)
+        segmentation.binarize_pupil(pupil_threshold)
+        segmentation.binarize_iris(iris_threshold)
+        segmentation.detect_pupil()
+        segmentation.detect_iris()
+        segmentation.unwrap_iris()
+        segmented = segmentation.visualize_segmentation()
+        plt.figure(figsize=(10, 10))
+        plt.imshow(segmented)
+        plt.title("Segmented Iris")
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()
+        return segmentation
+    
+    def compare_iris_codes(self, segmentation, iris_code1, iris_code2):
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 1, 1)
+        plt.imshow(iris_code1, cmap='gray', interpolation='nearest', aspect='auto')
+        plt.title("Iris Code 1")
+        plt.xlabel("Angular bits (real + imag)")
+        plt.ylabel("Radial bands")
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.subplot(2, 1, 2)
+        plt.imshow(iris_code2, cmap='gray', interpolation='nearest', aspect='auto')
+        plt.title("Iris Code 2")
+        plt.xlabel("Angular bits (real + imag)")
+        plt.ylabel("Radial bands")
+        plt.xticks([])
+        plt.yticks([])
+        plt.grid(False)
+        plt.tight_layout()
+        plt.show()
+
+        # plot the differences
+        diff = np.abs(iris_code1 - iris_code2)
+        cmap = mcolors.ListedColormap(['white', 'salmon'])
+        plt.figure(figsize=(10, 5))
+        plt.imshow(diff, cmap=cmap, interpolation='nearest', aspect='auto')
+        plt.title("Iris Code Differences")
+        plt.xlabel("Angular bits (real + imag)")
+        plt.ylabel("Radial bands")
+        plt.xticks([])  
+        plt.yticks([])  
+        plt.grid(False) 
+        plt.tight_layout()
+        plt.show()
+
+        dist = segmentation.hamming_distance(iris_code2)
+        print(f"Hamming distance: {dist}")
+        if dist < 0.25:
+            print("Iris codes are similar.")
+        else:
+            print("Iris codes are different.")
 
 
 def main():
     # Path to the input image
-    image_path = "data/034/IMG_034_R_2.JPG"
+    # image_path = "data/005/IMG_005_R_4.JPG"
     
-    # Create the segmentation object
-    segmentation = IrisSegmentation(image_path)
+    # # Create the segmentation object
+    # segmentation = IrisSegmentation(image_path)
     
-    # Convert to grayscale
-    gray = segmentation.to_grayscale()
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(segmentation.img_array)
-    plt.title("Original Image")
-    plt.axis('off')
+    # # Convert to grayscale
+    # gray = segmentation.to_grayscale()
+    # plt.figure(figsize=(10, 5))
+    # plt.subplot(1, 2, 1)
+    # plt.imshow(segmentation.img_array)
+    # plt.title("Original Image")
+    # plt.axis('off')
     
-    plt.subplot(1, 2, 2)
-    plt.imshow(gray, cmap='gray')
-    plt.title("Grayscale Image")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+    # plt.subplot(1, 2, 2)
+    # plt.imshow(gray, cmap='gray')
+    # plt.title("Grayscale Image")
+    # plt.axis('off')
+    # plt.tight_layout()
+    # plt.show()
     
-    # Compute thresholds for iris and pupil
+    # # Compute thresholds for iris and pupil
 
-    # 2.2 i 5.3 działa zajebiście na testowym
-    iris_threshold, pupil_threshold = segmentation.compute_threshold(X_I=2.2, X_P=5.3)
-    print(f"Iris threshold: {iris_threshold}, Pupil threshold: {pupil_threshold}")
+    # # 2.2 i 5.3 działa zajebiście na testowym
+    # iris_threshold, pupil_threshold = segmentation.compute_threshold(X_I=2.2, X_P=5.3)
+    # print(f"Iris threshold: {iris_threshold}, Pupil threshold: {pupil_threshold}")
     
-    # Binarize for pupil detection
-    binary_pupil = segmentation.binarize_pupil(pupil_threshold)
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(binary_pupil, cmap='gray')
-    plt.title("Binary Pupil")
-    plt.axis('off')
+    # # Binarize for pupil detection
+    # binary_pupil = segmentation.binarize_pupil(pupil_threshold)
+    # plt.figure(figsize=(10, 5))
+    # plt.subplot(1, 2, 1)
+    # plt.imshow(binary_pupil, cmap='gray')
+    # plt.title("Binary Pupil")
+    # plt.axis('off')
     
-    # Binarize for iris detection
-    binary_iris = segmentation.binarize_iris(iris_threshold)
-    plt.subplot(1, 2, 2)
-    plt.imshow(binary_iris, cmap='gray')
-    plt.title("Binary Iris")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+    # # Binarize for iris detection
+    # binary_iris = segmentation.binarize_iris(iris_threshold)
+    # plt.subplot(1, 2, 2)
+    # plt.imshow(binary_iris, cmap='gray')
+    # plt.title("Binary Iris")
+    # plt.axis('off')
+    # plt.tight_layout()
+    # plt.show()
     
-    # Detect pupil
-    pupil_center, pupil_radius = segmentation.detect_pupil()
-    print(f"Pupil center: {pupil_center}, Pupil radius: {pupil_radius}")
+    # # Detect pupil
+    # pupil_center, pupil_radius = segmentation.detect_pupil()
+    # print(f"Pupil center: {pupil_center}, Pupil radius: {pupil_radius}")
     
-    # Detect iris
-    _, iris_radius = segmentation.detect_iris()
-    print(f"Iris radius: {iris_radius}")
+    # # Detect iris
+    # _, iris_radius = segmentation.detect_iris()
+    # print(f"Iris radius: {iris_radius}")
     
-    # Visualize segmentation
-    segmented = segmentation.visualize_segmentation()
-    plt.figure(figsize=(10, 10))
-    plt.imshow(segmented)
-    plt.title("Segmented Iris")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+    # # Visualize segmentation
+    # segmented = segmentation.visualize_segmentation()
+    # plt.figure(figsize=(10, 10))
+    # plt.imshow(segmented)
+    # plt.title("Segmented Iris")
+    # plt.axis('off')
+    # plt.tight_layout()
+    # plt.show()
     
-    # Unwrap iris
-    unwrapped = segmentation.unwrap_iris()
-    plt.figure(figsize=(12, 4))
-    plt.imshow(unwrapped, cmap='gray')
-    plt.title("Unwrapped Iris")
-    plt.axis('off')
-    plt.tight_layout()
-    plt.show()
+    # # Unwrap iris
+    # unwrapped = segmentation.unwrap_iris()
+    # plt.figure(figsize=(12, 4))
+    # plt.imshow(unwrapped, cmap='gray')
+    # plt.title("Unwrapped Iris")
+    # plt.axis('off')
+    # plt.tight_layout()
+    # plt.show()
     
-    # Save results
-    segmentation.save_unwrapped_iris("unwrapped_iris.png")
-    segmentation.save_segmentation("segmented_iris.png")
+    # # Save results
+    # segmentation.save_unwrapped_iris("unwrapped_iris.png")
+    # segmentation.save_segmentation("segmented_iris.png")
+
+
+    ## IRIS CODE GENERATION AND VISUALIZATION ##
+
+    
+    path1 = "data/041/IMG_041_L_3.JPG"
+    path2 = "data/041/IMG_041_R_6.JPG"
+
+    segmenter = IrisSegmenter()
+    
+    segmentation = segmenter.prep(IrisSegmentation(path1), X_I=1.9, X_P=4.9)
+    iris_code = segmentation.generate_iris_code()
+
+    segmentation2 = segmenter.prep(IrisSegmentation(path2), X_I=2.1, X_P=5.2)
+    iris_code2 = segmentation2.generate_iris_code()
+
+    # visual iris code differences
+    segmenter.compare_iris_codes(segmentation, iris_code, iris_code2)
+
+    ## teraz z innym okiem
+    path3 = "test_eye.JPG"
+
+    segmentation3 = segmenter.prep(IrisSegmentation(path3), X_I=2.2, X_P=5.3)
+    iris_code3 = segmentation3.generate_iris_code()
+    segmenter.compare_iris_codes(segmentation, iris_code, iris_code3)
 
 if __name__ == "__main__":
     main()

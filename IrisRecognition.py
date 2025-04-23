@@ -2,6 +2,7 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from scipy.ndimage import gaussian_filter
 import cv2
 import math
 
@@ -134,7 +135,7 @@ class IrisSegmentation:
         if self.binary_iris is None:
             self.binarize_iris()
         
-        mask = np.zeros_like(self.gray_img)
+        mask = np.zeros_like(self.binary_iris)
         
         max_distance = min(
             self.pupil_center[0], 
@@ -144,30 +145,25 @@ class IrisSegmentation:
             int(4.5 * self.pupil_radius)
         )
         
-        
-        edges = cv2.Canny(self.gray_img, 30, 70)
-        
+        edges = cv2.Canny(self.binary_iris, 30, 70)
         
         y, x = np.ogrid[:self.height, :self.width]
         dist_from_center = np.sqrt((x - self.pupil_center[0])**2 + (y - self.pupil_center[1])**2)
-        
         
         mask = np.logical_and(
             dist_from_center >= self.pupil_radius + 5,  
             dist_from_center <= max_distance
         ).astype(np.uint8) * 255
         
-        
         masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
-        
         
         circles = cv2.HoughCircles(
             masked_edges,
             cv2.HOUGH_GRADIENT,
             dp=1,
             minDist=self.pupil_radius*2,
-            param1=30,
-            param2=20,
+            param1=50,  
+            param2=30,  
             minRadius=int(self.pupil_radius*1.5),
             maxRadius=int(self.pupil_radius*4)
         )
@@ -182,8 +178,7 @@ class IrisSegmentation:
                     self.iris_radius = i[2]
                     return self.pupil_center, self.iris_radius
         
-        
-        self.iris_radius = int(self.pupil_radius * 3.2)  
+        self.iris_radius = int(self.pupil_radius * 2.8)  
         return self.pupil_center, self.iris_radius
 
     def unwrap_iris(self, radial_resolution=80, angular_resolution=360):
@@ -259,44 +254,48 @@ class IrisSegmentation:
         visualization = self.visualize_segmentation()
         cv2.imwrite(filename, cv2.cvtColor(visualization, cv2.COLOR_RGB2BGR))
     
-    def generate_iris_code(self, radial_bands=8, frequency=0.5, angular_segments=128):
-        """Generate binary iris code using Gabor wavelet transform and segment-wise mean encoding"""
+    def generate_iris_code(self, radial_bands=8, frequency=0.45, angular_segments=256):
+        """Generate binary iris code with proper Gabor response capture"""
         if self.unwrapped_iris is None:
             self.unwrap_iris()
 
-        sigma = 0.5 * math.pi * frequency
+        sigma = 2.0
+        band_height = max(4, self.unwrapped_iris.shape[0] // radial_bands) 
+        code = np.zeros((radial_bands, angular_segments * 2), dtype=np.uint8)
 
-        band_height = self.unwrapped_iris.shape[0] // radial_bands
-        code = np.zeros((radial_bands, angular_segments * 2), dtype=np.uint8)  # 2 bits per segment (real + imag)
+        t = np.linspace(-np.pi, np.pi, self.unwrapped_iris.shape[1])
+        gaussian_window = np.exp(-t**2 / (2 * sigma**2))
+        gabor_real = gaussian_window * np.cos(2 * np.pi * frequency * t)
+        gabor_imag = gaussian_window * np.sin(2 * np.pi * frequency * t)
+
+        gabor_real = (gabor_real - np.mean(gabor_real)) / np.linalg.norm(gabor_real)
+        gabor_imag = (gabor_imag - np.mean(gabor_imag)) / np.linalg.norm(gabor_imag)
 
         for band in range(radial_bands):
-            start = band * band_height
-            end = (band + 1) * band_height if band < radial_bands - 1 else self.unwrapped_iris.shape[0]
+            start = max(0, band * band_height - band_height//4)
+            end = min(self.unwrapped_iris.shape[0], 
+                    (band + 1) * band_height + band_height//4)
             strip = self.unwrapped_iris[start:end, :]
 
-            signal = np.mean(strip, axis=0)
+            smoothed = gaussian_filter(strip, sigma=0.5)
+            signal = np.mean(smoothed, axis=0)
+            
+            signal = (signal - np.mean(signal)) / (np.std(signal) + 1e-8)
 
-            t = np.linspace(-np.pi, np.pi, len(signal))
-            gabor_real = np.exp(-t**2 / (2 * sigma**2)) * np.cos(2 * np.pi * frequency * t)
-            gabor_imag = np.exp(-t**2 / (2 * sigma**2)) * np.sin(2 * np.pi * frequency * t)
-
-            filtered_real = np.convolve(signal, gabor_real - np.mean(gabor_real), mode='same')
+            filtered_real = np.convolve(signal, gabor_real, mode='same')
             filtered_imag = np.convolve(signal, gabor_imag, mode='same')
 
-            # Segment-wise encoding
-            segment_length = len(signal) // angular_segments
-            interleaved_code = []
+            real_thresh = np.median(filtered_real)
+            imag_thresh = np.median(filtered_imag)
 
+            segment_length = len(signal) // angular_segments
             for i in range(angular_segments):
                 s = i * segment_length
                 e = (i + 1) * segment_length if i < angular_segments - 1 else len(signal)
-
-                real_bit = int(np.mean(filtered_real[s:e]) > 0)
-                imag_bit = int(np.mean(filtered_imag[s:e]) > 0)
-
-                interleaved_code.extend([real_bit, imag_bit])
-
-            code[band, :] = interleaved_code
+                
+                # Encode based on median threshold
+                code[band, 2*i] = int(np.mean(filtered_real[s:e]) > real_thresh)
+                code[band, 2*i+1] = int(np.mean(filtered_imag[s:e]) > imag_thresh)
 
         self.iris_code = code
         return code
@@ -401,21 +400,22 @@ def main():
 
     segmenter = IrisSegmenter()
     
-    segmentation = segmenter.prep(IrisSegmentation(path1), X_I=2.3, X_P=4.3)
-    iris_code = segmentation.generate_iris_code(angular_segments=128)
+    # segmentation = segmenter.prep(IrisSegmentation(path1), X_I=2.3, X_P=4.3)
+    # iris_code = segmentation.generate_iris_code(angular_segments=128)
 
-    segmentation2 = segmenter.prep(IrisSegmentation(path2), X_I=2.2, X_P=4.2)
-    iris_code2 = segmentation2.generate_iris_code(angular_segments=128)
+    # segmentation2 = segmenter.prep(IrisSegmentation(path2), X_I=2.2, X_P=4.2)
+    # iris_code2 = segmentation2.generate_iris_code(angular_segments=128)
 
-    # visual iris code differences
-    segmenter.compare_iris_codes(segmentation, iris_code, iris_code2)
+    # # visual iris code differences
+    # segmenter.compare_iris_codes(segmentation, iris_code, iris_code2)
 
     ## teraz z innym okiem
     path3 = "test_eye.JPG"
 
     segmentation3 = segmenter.prep(IrisSegmentation(path3), X_I=2.2, X_P=5.3)
-    iris_code3 = segmentation3.generate_iris_code()
-    segmenter.compare_iris_codes(segmentation, iris_code, iris_code3)
+    segmentation3.generate_iris_code()
+    segmentation3.visualize_iris_code()
+    # segmenter.compare_iris_codes(segmentation, iris_code, iris_code3)
 
 if __name__ == "__main__":
     main()

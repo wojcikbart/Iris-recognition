@@ -2,7 +2,6 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from scipy import ndimage
 import cv2
 import math
 
@@ -255,15 +254,15 @@ class IrisSegmentation:
         visualization = self.visualize_segmentation()
         cv2.imwrite(filename, cv2.cvtColor(visualization, cv2.COLOR_RGB2BGR))
     
-    def generate_iris_code(self, radial_bands=8, frequency=0.5):
-        """Generate binary iris code using Gabor wavelet transform"""
+    def generate_iris_code(self, radial_bands=8, frequency=0.5, angular_segments=128):
+        """Generate binary iris code using Gabor wavelet transform and segment-wise mean encoding"""
         if self.unwrapped_iris is None:
             self.unwrap_iris()
 
         sigma = 0.5 * math.pi * frequency
-        
+
         band_height = self.unwrapped_iris.shape[0] // radial_bands
-        code = np.zeros((radial_bands, self.unwrapped_iris.shape[1] * 2), dtype=np.uint8)
+        code = np.zeros((radial_bands, angular_segments * 2), dtype=np.uint8)  # 2 bits per segment (real + imag)
 
         for band in range(radial_bands):
             start = band * band_height
@@ -273,18 +272,26 @@ class IrisSegmentation:
             signal = np.mean(strip, axis=0)
 
             t = np.linspace(-np.pi, np.pi, len(signal))
-            
             gabor_real = np.exp(-t**2 / (2 * sigma**2)) * np.cos(2 * np.pi * frequency * t)
             gabor_imag = np.exp(-t**2 / (2 * sigma**2)) * np.sin(2 * np.pi * frequency * t)
 
-            filtered_real = np.convolve(signal, gabor_real, mode='same')
+            filtered_real = np.convolve(signal, gabor_real - np.mean(gabor_real), mode='same')
             filtered_imag = np.convolve(signal, gabor_imag, mode='same')
 
-            real_binary = (filtered_real > 0).astype(np.uint8)
-            imag_binary = (filtered_imag > 0).astype(np.uint8)
+            # Segment-wise encoding
+            segment_length = len(signal) // angular_segments
+            interleaved_code = []
 
-            code[band, :signal.shape[0]] = real_binary
-            code[band, signal.shape[0]:] = imag_binary
+            for i in range(angular_segments):
+                s = i * segment_length
+                e = (i + 1) * segment_length if i < angular_segments - 1 else len(signal)
+
+                real_bit = int(np.mean(filtered_real[s:e]) > 0)
+                imag_bit = int(np.mean(filtered_imag[s:e]) > 0)
+
+                interleaved_code.extend([real_bit, imag_bit])
+
+            code[band, :] = interleaved_code
 
         self.iris_code = code
         return code
@@ -373,6 +380,8 @@ class IrisSegmenter:
         plt.tight_layout()
         plt.show()
 
+        if iris_code1.shape != iris_code2.shape:
+            raise ValueError("Iris codes must be of the same size for Hamming distance calculation.")
         dist = segmentation.hamming_distance(iris_code2)
         print(f"Hamming distance: {dist}")
         if dist < 0.2:
@@ -387,11 +396,11 @@ def main():
 
     segmenter = IrisSegmenter()
     
-    segmentation = segmenter.prep(IrisSegmentation(path1), X_I=1.9, X_P=4.9)
-    iris_code = segmentation.generate_iris_code()
+    segmentation = segmenter.prep(IrisSegmentation(path1), X_I=2.3, X_P=4.3)
+    iris_code = segmentation.generate_iris_code(angular_segments=128)
 
-    segmentation2 = segmenter.prep(IrisSegmentation(path2), X_I=2.1, X_P=5.2)
-    iris_code2 = segmentation2.generate_iris_code()
+    segmentation2 = segmenter.prep(IrisSegmentation(path2), X_I=2.2, X_P=4.2)
+    iris_code2 = segmentation2.generate_iris_code(angular_segments=128)
 
     # visual iris code differences
     segmenter.compare_iris_codes(segmentation, iris_code, iris_code2)

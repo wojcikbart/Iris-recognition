@@ -1,5 +1,4 @@
 from PIL import Image
-from networkx import density
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage

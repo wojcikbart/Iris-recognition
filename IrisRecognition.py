@@ -6,8 +6,13 @@ import cv2
 import math
 
 class IrisSegmentation:
-    def __init__(self, image_path):
-        self.image = Image.open(image_path).convert("RGB")
+    def __init__(self, image_path=None, image=None):
+        if image_path is not None:
+            self.image = Image.open(image_path).convert("RGB")
+        elif image is not None:
+            self.image = image
+        else:
+            raise ValueError("Either image_path or image must be provided")
         self.img_array = np.array(self.image)
         self.processed_img = self.img_array.copy()
         self.gray_img = None

@@ -285,8 +285,8 @@ class IrisSegmentation:
             filtered_real = np.convolve(signal, gabor_real, mode='same')
             filtered_imag = np.convolve(signal, gabor_imag, mode='same')
 
-            real_thresh = np.median(filtered_real)
-            imag_thresh = np.median(filtered_imag)
+            real_thresh = np.mean(filtered_real)
+            imag_thresh = np.mean(filtered_imag)
 
             segment_length = len(signal) // angular_segments
             for i in range(angular_segments):

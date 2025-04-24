@@ -285,17 +285,16 @@ class IrisSegmentation:
             filtered_real = np.convolve(signal, gabor_real, mode='same')
             filtered_imag = np.convolve(signal, gabor_imag, mode='same')
 
-            real_thresh = np.mean(filtered_real)
-            imag_thresh = np.mean(filtered_imag)
+            # real_thresh = np.mean(filtered_real)
+            # imag_thresh = np.mean(filtered_imag)
 
             segment_length = len(signal) // angular_segments
             for i in range(angular_segments):
                 s = i * segment_length
                 e = (i + 1) * segment_length if i < angular_segments - 1 else len(signal)
                 
-                # Encode based on median threshold
-                code[band, 2*i] = int(np.mean(filtered_real[s:e]) > real_thresh)
-                code[band, 2*i+1] = int(np.mean(filtered_imag[s:e]) > imag_thresh)
+                code[band, 2*i] = int(np.mean(filtered_real[s:e]) > 0)
+                code[band, 2*i+1] = int(np.mean(filtered_imag[s:e]) > 0)
 
         self.iris_code = code
         return code
